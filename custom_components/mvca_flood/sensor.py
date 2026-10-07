@@ -6,9 +6,9 @@ from dataclasses import dataclass
 from typing import Final
 
 from homeassistant.components.sensor import SensorEntity
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -21,7 +21,7 @@ from .const import (
     TYPE_FLOOD,
     TYPE_LOW_WATER,
 )
-from .coordinator import MVCADataUpdateCoordinator
+from .coordinator import MVCAConfigEntry, MVCADataUpdateCoordinator
 
 
 @dataclass(frozen=True)
@@ -69,17 +69,13 @@ SENSORS: Final = (
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    entry: ConfigEntry,
+    entry: MVCAConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up MVCA sensors."""
 
-    coordinator: MVCADataUpdateCoordinator = hass.data[DOMAIN][
-        entry.entry_id
-    ]
-
     async_add_entities(
-        MVCASensor(coordinator, description)
+        MVCASensor(entry.runtime_data, description)
         for description in SENSORS
     )
 
@@ -109,12 +105,12 @@ class MVCASensor(
         self._attr_unique_id = (
             f"mvca_{description.key}"
         )
-        self._attr_device_info = {
-            "identifiers": {(DOMAIN, "mvca")},
-            "name": "MVCA Flood & Low Water",
-            "manufacturer": "Mississippi Valley Conservation Authority",
-            "configuration_url": DASHBOARD_URL,
-        }
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, "mvca")},
+            name="MVCA Flood & Low Water",
+            manufacturer="Mississippi Valley Conservation Authority",
+            configuration_url=DASHBOARD_URL,
+        )
 
     @property
     def native_value(self) -> str | None:

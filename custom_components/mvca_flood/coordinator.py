@@ -11,12 +11,14 @@ from bs4 import BeautifulSoup
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import (
     DataUpdateCoordinator,
     UpdateFailed,
 )
 
 from .const import (
+    CONF_SCAN_INTERVAL,
     DASHBOARD_URL,
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
@@ -29,19 +31,23 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
+type MVCAConfigEntry = ConfigEntry[MVCADataUpdateCoordinator]
+
 
 class MVCADataUpdateCoordinator(DataUpdateCoordinator[dict[str, str]]):
     """Coordinate MVCA data updates."""
 
+    config_entry: MVCAConfigEntry
+
     def __init__(
         self,
         hass: HomeAssistant,
-        config_entry: ConfigEntry,
+        config_entry: MVCAConfigEntry,
     ) -> None:
         """Initialize the coordinator."""
 
         scan_interval = config_entry.options.get(
-            "scan_interval",
+            CONF_SCAN_INTERVAL,
             DEFAULT_SCAN_INTERVAL,
         )
 
@@ -53,25 +59,15 @@ class MVCADataUpdateCoordinator(DataUpdateCoordinator[dict[str, str]]):
             update_interval=timedelta(minutes=scan_interval),
         )
 
-        self._session: aiohttp.ClientSession | None = None
-
     async def _async_update_data(self) -> dict[str, str]:
         """Fetch and parse MVCA status data."""
 
+        session = async_get_clientsession(self.hass)
+
         try:
-            if self._session is None:
-                self._session = aiohttp.ClientSession()
-
-            timeout = aiohttp.ClientTimeout(total=30)
-
-            async with self._session.get(
+            async with session.get(
                 DASHBOARD_URL,
-                timeout=timeout,
-                headers={
-                    "User-Agent": (
-                        "Home Assistant MVCA Flood Integration"
-                    )
-                },
+                timeout=aiohttp.ClientTimeout(total=30),
             ) as response:
                 response.raise_for_status()
                 html = await response.text()
@@ -79,14 +75,10 @@ class MVCADataUpdateCoordinator(DataUpdateCoordinator[dict[str, str]]):
             return self._parse_dashboard(html)
 
         except (aiohttp.ClientError, TimeoutError) as err:
-            raise UpdateFailed(
-                f"Unable to retrieve MVCA data: {err}"
-            ) from err
+            raise UpdateFailed(f"Unable to retrieve MVCA data: {err}") from err
 
         except ValueError as err:
-            raise UpdateFailed(
-                f"Unable to parse MVCA data: {err}"
-            ) from err
+            raise UpdateFailed(f"Unable to parse MVCA data: {err}") from err
 
     @staticmethod
     def _normalise(value: str) -> str:
@@ -95,10 +87,7 @@ class MVCADataUpdateCoordinator(DataUpdateCoordinator[dict[str, str]]):
         return re.sub(r"\s+", " ", value).strip()
 
     @classmethod
-    def _parse_dashboard(
-        cls,
-        html: str,
-    ) -> dict[str, str]:
+    def _parse_dashboard(cls, html: str) -> dict[str, str]:
         """Parse MVCA dashboard HTML."""
 
         soup = BeautifulSoup(html, "html.parser")
@@ -152,11 +141,7 @@ class MVCADataUpdateCoordinator(DataUpdateCoordinator[dict[str, str]]):
         return data
 
     @staticmethod
-    def _extract_section(
-        text: str,
-        start: str,
-        end: str,
-    ) -> str:
+    def _extract_section(text: str, start: str, end: str) -> str:
         """Extract text between two headings."""
 
         start_index = text.find(start)
@@ -176,23 +161,16 @@ class MVCADataUpdateCoordinator(DataUpdateCoordinator[dict[str, str]]):
         return section.strip()
 
     @classmethod
-    def _extract_status(
-        cls,
-        section: str,
-        river: str,
-    ) -> str:
+    def _extract_status(cls, section: str, river: str) -> str:
         """Extract the status associated with a river."""
 
         position = section.find(river)
 
         if position == -1:
-            raise ValueError(
-                f"Could not find '{river}' in MVCA section"
-            )
+            raise ValueError(f"Could not find '{river}' in MVCA section")
 
-        remainder = section[position + len(river):]
+        remainder = section[position + len(river) :]
 
-        # Status ends at the next known river name.
         next_positions = [
             position
             for position in (
@@ -208,11 +186,7 @@ class MVCADataUpdateCoordinator(DataUpdateCoordinator[dict[str, str]]):
 
         value = cls._normalise(remainder)
 
-        # The dashboard should give us a short status. Protect against
-        # accidentally returning unrelated page content.
         if not value or len(value) > 100:
-            raise ValueError(
-                f"Invalid status for '{river}': {value!r}"
-            )
+            raise ValueError(f"Invalid status for '{river}': {value!r}")
 
         return value

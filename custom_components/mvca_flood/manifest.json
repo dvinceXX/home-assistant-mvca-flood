@@ -2,12 +2,12 @@
   "domain": "mvca_flood",
   "name": "MVCA Flood & Low Water",
   "codeowners": ["@dvinceXX"],
-  "single_config_entry": true
+  "single_config_entry": true,
   "config_flow": true,
   "documentation": "https://github.com/dvinceXX/home-assistant-mvca-flood",
   "integration_type": "hub",
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/dvinceXX/home-assistant-mvca-flood/issues",
-  "requirements": [],
+  "requirements": ["beautifulsoup4"],
   "version": "1.0.0"
 }
