@@ -86,107 +86,104 @@ class MVCADataUpdateCoordinator(DataUpdateCoordinator[dict[str, str]]):
 
         return re.sub(r"\s+", " ", value).strip()
 
-    @classmethod
-    def _parse_dashboard(cls, html: str) -> dict[str, str]:
-        """Parse MVCA dashboard HTML."""
+@classmethod
+def _parse_dashboard(cls, html: str) -> dict[str, str]:
+    """Parse MVCA dashboard HTML."""
+    soup = BeautifulSoup(html, "html.parser")
 
-        soup = BeautifulSoup(html, "html.parser")
+    flood_section = cls._find_status_section(soup, "Flood Status")
+    low_water_section = cls._find_status_section(soup, "Low Water Status")
 
-        text = cls._normalise(soup.get_text(" ", strip=True))
+    data: dict[str, str] = {}
 
-        # The dashboard currently presents the data in this form:
-        #
-        # Flood Status
-        # Mississippi River Normal
-        # Carp River Normal
-        # Lower Ottawa Normal
-        #
-        # Low Water Status
-        # Mississippi River Normal
-        # Carp River Normal
-        # Lower Ottawa Normal
-        #
-        # We deliberately parse the labelled sections instead of relying
-        # on arbitrary DOM indexes.
-
-        flood_section = cls._extract_section(
-            text,
-            "Flood Status",
-            "Low Water Status",
+    for river, display_name in (
+        (RIVER_MISSISSIPPI, "Mississippi River"),
+        (RIVER_CARP, "Carp River"),
+        (RIVER_LOWER_OTTAWA, "Lower Ottawa"),
+    ):
+        data[f"{TYPE_FLOOD}_{river}"] = cls._extract_status(
+            flood_section,
+            display_name,
+        )
+        data[f"{TYPE_LOW_WATER}_{river}"] = cls._extract_status(
+            low_water_section,
+            display_name,
         )
 
-        low_water_section = cls._extract_section(
-            text,
-            "Low Water Status",
-            "Normal status indicates",
+    return data
+
+
+@staticmethod
+def _find_status_section(
+    soup: BeautifulSoup,
+    heading_text: str,
+):
+    """Find the DOM section containing a status heading."""
+    heading = soup.find(
+        lambda tag: (
+            tag.name in {"h2", "h3", "h4"}
+            and tag.get_text(" ", strip=True).lower()
+            == heading_text.lower()
         )
+    )
 
-        data: dict[str, str] = {}
+    if heading is None:
+        raise ValueError(f"Could not find '{heading_text}' section")
 
-        for river, display_name in (
-            (RIVER_MISSISSIPPI, "Mississippi River"),
-            (RIVER_CARP, "Carp River"),
-            (RIVER_LOWER_OTTAWA, "Lower Ottawa"),
+    # Walk up until we find a container that contains the status
+    # heading and its associated river/status elements.
+    container = heading.parent
+
+    while container is not None:
+        text = container.get_text(" ", strip=True)
+
+        if (
+            "Mississippi River" in text
+            and "Carp River" in text
+            and "Lower Ottawa" in text
         ):
-            data[f"{TYPE_FLOOD}_{river}"] = cls._extract_status(
-                flood_section,
-                display_name,
-            )
+            return container
 
-            data[f"{TYPE_LOW_WATER}_{river}"] = cls._extract_status(
-                low_water_section,
-                display_name,
-            )
+        container = container.parent
 
-        return data
+    raise ValueError(f"Could not find data for '{heading_text}'")
 
-    @staticmethod
-    def _extract_section(text: str, start: str, end: str) -> str:
-        """Extract text between two headings."""
 
-        start_index = text.find(start)
+@classmethod
+def _extract_status(cls, section, river: str) -> str:
+    """Extract the status associated with a river."""
+    valid_statuses = (
+        "Normal",
+        "Watershed Conditions Statement - Water Safety",
+        "Watershed Conditions Statement - Flood Outlook",
+        "Flood Watch",
+        "Flood Warning",
+    )
 
-        if start_index == -1:
-            raise ValueError(f"Could not find '{start}' section")
+    # Find the element containing the river name.
+    river_element = section.find(
+        string=lambda value: value and river in value
+    )
 
-        start_index += len(start)
+    if river_element is None:
+        raise ValueError(f"Could not find '{river}' in MVCA section")
 
-        end_index = text.find(end, start_index)
+    # Inspect the closest small container first.
+    element = river_element.parent
 
-        if end_index == -1:
-            section = text[start_index:]
-        else:
-            section = text[start_index:end_index]
+    for _ in range(4):
+        if element is None:
+            break
 
-        return section.strip()
+        text = cls._normalise(element.get_text(" ", strip=True))
 
-    @classmethod
-    def _extract_status(cls, section: str, river: str) -> str:
-        """Extract the status associated with a river."""
+        # The status should be one of the known MVCA values.
+        for status in valid_statuses:
+            if status in text:
+                return status
 
-        position = section.find(river)
+        element = element.parent
 
-        if position == -1:
-            raise ValueError(f"Could not find '{river}' in MVCA section")
-
-        remainder = section[position + len(river) :]
-
-        next_positions = [
-            position
-            for position in (
-                remainder.find("Mississippi River"),
-                remainder.find("Carp River"),
-                remainder.find("Lower Ottawa"),
-            )
-            if position >= 0
-        ]
-
-        if next_positions:
-            remainder = remainder[: min(next_positions)]
-
-        value = cls._normalise(remainder)
-
-        if not value or len(value) > 100:
-            raise ValueError(f"Invalid status for '{river}': {value!r}")
-
-        return value
+    raise ValueError(
+        f"Could not find valid status for '{river}'"
+    )
