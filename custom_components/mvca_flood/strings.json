@@ -1,0 +1,16 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "MVCA Flood & Low Water",
+        "description": "Configure how often Home Assistant checks the Mississippi Valley Conservation Authority dashboard.",
+        "data": {
+          "scan_interval": "Update interval (minutes)"
+        }
+      }
+    },
+    "abort": {
+      "single_instance_allowed": "Only one MVCA integration instance is supported."
+    }
+  }
+}
