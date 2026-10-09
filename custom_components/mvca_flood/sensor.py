@@ -103,7 +103,6 @@ class MVCASensor(
     """Representation of an MVCA sensor."""
 
     _attr_has_entity_name = True
-    _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def __init__(
         self,
