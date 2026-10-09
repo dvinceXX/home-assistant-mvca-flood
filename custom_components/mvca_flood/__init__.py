@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import logging
+from typing import TypeAlias
+
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
@@ -9,25 +12,37 @@ from homeassistant.core import HomeAssistant
 from .const import CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL
 from .coordinator import MVCADataUpdateCoordinator
 
-PLATFORMS = [Platform.SENSOR]
+_LOGGER = logging.getLogger(__name__)
 
-# Keep this alias available to the sensor platform and other modules.
-MVCAConfigEntry = ConfigEntry
+PLATFORMS: list[Platform] = [Platform.SENSOR]
+
+MVCAConfigEntry: TypeAlias = ConfigEntry
 
 
 def _get_scan_interval(entry: MVCAConfigEntry) -> int:
     """Return a valid polling interval from the config entry."""
+    value = entry.options.get(
+        CONF_SCAN_INTERVAL,
+        entry.data.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL),
+    )
+
     try:
-        interval = int(
-            entry.options.get(
-                CONF_SCAN_INTERVAL,
-                entry.data.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL),
-            )
-        )
+        interval = int(value)
     except (TypeError, ValueError):
+        _LOGGER.warning(
+            "Invalid MVCA scan interval %r; using default %s minutes",
+            value,
+            DEFAULT_SCAN_INTERVAL,
+        )
         return DEFAULT_SCAN_INTERVAL
 
     if not 5 <= interval <= 1440:
+        _LOGGER.warning(
+            "MVCA scan interval %s is outside 5–1440 minutes; "
+            "using default %s minutes",
+            interval,
+            DEFAULT_SCAN_INTERVAL,
+        )
         return DEFAULT_SCAN_INTERVAL
 
     return interval
@@ -43,17 +58,24 @@ async def async_setup_entry(
         scan_interval=_get_scan_interval(entry),
     )
 
-    # Do not forward the platform if the first refresh fails.
+    # Require a successful first refresh before creating entities.
     await coordinator.async_config_entry_first_refresh()
 
     entry.runtime_data = coordinator
+
     entry.async_on_unload(
         entry.add_update_listener(_async_update_listener)
+    )
+
+    _LOGGER.debug(
+        "Setting up MVCA sensor platform; data keys: %s",
+        list(coordinator.data or {}),
     )
 
     await hass.config_entries.async_forward_entry_setups(
         entry, PLATFORMS
     )
+
     return True
 
 
