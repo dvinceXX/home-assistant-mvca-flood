@@ -87,6 +87,23 @@ class MVCADataUpdateCoordinator(DataUpdateCoordinator[dict[str, str]]):
                 f"Unable to retrieve MVCA dashboard: {err}"
             ) from err
 
+        # Temporary diagnostics: inspect what the server actually returned.
+        soup = BeautifulSoup(html, "html.parser")
+        _LOGGER.warning(
+            "MVCA response title: %s",
+            soup.title.get_text(" ", strip=True) if soup.title else None,
+        )
+        _LOGGER.warning(
+            "MVCA headings: %s",
+            [
+                heading.get_text(" ", strip=True)
+                for heading in soup.find_all(
+                    ["h1", "h2", "h3", "h4", "h5", "h6"]
+                )
+            ],
+        )
+        _LOGGER.warning("MVCA response length: %d", len(html))
+
         try:
             data = self._parse_dashboard(html)
         except (ValueError, AttributeError, TypeError) as err:
