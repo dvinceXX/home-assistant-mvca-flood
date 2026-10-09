@@ -146,82 +146,81 @@ class MVCADataUpdateCoordinator(DataUpdateCoordinator[dict[str, str]]):
         return data
 
     @classmethod
-    def _find_status_section(
-        cls,
-        soup: BeautifulSoup,
-        heading_text: str,
-    ):
-        """Find the smallest ancestor containing a heading and all rivers."""
-        heading = soup.find(
-            lambda tag: (
-                tag.name in {"h1", "h2", "h3", "h4", "h5", "h6"}
-                and cls._normalise(tag.get_text(" ", strip=True)).casefold()
-                == heading_text.casefold()
+    def _parse_dashboard(cls, html: str) -> dict[str, str]:
+        """Parse flood and low-water statuses from dashboard text."""
+        if not html or not html.strip():
+            raise ValueError("The MVCA dashboard response was empty")
+
+        soup = BeautifulSoup(html, "html.parser")
+        page_text = cls._normalise(soup.get_text(" ", strip=True))
+        folded = page_text.casefold()
+
+        flood_label = "Flood Status"
+        low_water_label = "Low Water Status"
+
+        flood_start = folded.find(flood_label.casefold())
+        low_water_start = folded.find(low_water_label.casefold())
+
+        if flood_start < 0:
+            raise ValueError("Could not find Flood Status in dashboard text")
+        if low_water_start < 0:
+            raise ValueError("Could not find Low Water Status in dashboard text")
+        if low_water_start <= flood_start:
+            raise ValueError("Unexpected order of MVCA status labels")
+
+        flood_text = page_text[
+            flood_start + len(flood_label):low_water_start
+        ]
+        low_water_text = page_text[
+            low_water_start + len(low_water_label):
+        ]
+
+        data: dict[str, str] = {}
+
+        for river_key, river_name in RIVERS:
+            data[f"{TYPE_FLOOD}_{river_key}"] = cls._extract_text_status(
+                flood_text, river_name, FLOOD_STATUSES
             )
-        )
-
-        if heading is None:
-            raise ValueError(
-                f"Could not find the '{heading_text}' heading"
+            data[f"{TYPE_LOW_WATER}_{river_key}"] = cls._extract_text_status(
+                low_water_text, river_name, LOW_WATER_STATUSES
             )
 
-        container = heading.parent
-
-        while container is not None:
-            text = cls._normalise(
-                container.get_text(" ", strip=True)
-            )
-            if all(name in text for _, name in RIVERS):
-                return container
-
-            container = container.parent
-
-        raise ValueError(
-            f"Could not find all river data under '{heading_text}'"
-        )
+        return data
 
     @classmethod
-    def _extract_status(
+    def _extract_text_status(
         cls,
-        section,
+        section_text: str,
         river: str,
         valid_statuses: tuple[str, ...],
     ) -> str:
-        """Extract a known status associated with a river."""
-        river_element = section.find(
-            string=lambda value: (
-                value is not None
-                and river.casefold() in cls._normalise(value).casefold()
-            )
-        )
+        """Extract a status following a river name in a text section."""
+        folded = section_text.casefold()
+        river_start = folded.find(river.casefold())
 
-        if river_element is None:
-            raise ValueError(
-                f"Could not find '{river}' in the status section"
-            )
+        if river_start < 0:
+            raise ValueError(f"Could not find '{river}' in status text")
 
-        # Search nearby elements first, avoiding unrelated page content.
-        element = river_element.parent
+        start = river_start + len(river)
+        next_river_positions = [
+            pos
+            for _, name in RIVERS
+            if name.casefold() != river.casefold()
+            and (pos := folded.find(name.casefold(), start)) >= 0
+        ]
+        end = min(next_river_positions, default=len(section_text))
+        river_status_text = section_text[start:end]
 
-        for _ in range(5):
-            if element is None:
-                break
-
-            text = cls._normalise(element.get_text(" ", strip=True))
-
-            for status in sorted(
-                valid_statuses,
-                key=len,
-                reverse=True,
+        for status in sorted(valid_statuses, key=len, reverse=True):
+            if re.search(
+                rf"(?<!\w){re.escape(status)}(?!\w)",
+                river_status_text,
+                re.IGNORECASE,
             ):
-                if status.casefold() in text.casefold():
-                    return status
-
-            element = element.parent
+                return status
 
         raise ValueError(
-            f"Could not identify a known status for '{river}'. "
-            "The MVCA page may have changed or published a new status."
+            f"Could not identify a known status for '{river}'"
         )
 
     @staticmethod
