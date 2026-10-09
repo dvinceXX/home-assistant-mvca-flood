@@ -5,7 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Final
 
-from homeassistant.components.sensor import SensorEntity
+from homeassistant.components.sensor import (
+    SensorEntity,
+    SensorEntityDescription,
+)
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
@@ -24,45 +27,57 @@ from .const import (
 from .coordinator import MVCAConfigEntry, MVCADataUpdateCoordinator
 
 
-@dataclass(frozen=True)
-class MVCASensorDescription:
+@dataclass(frozen=True, kw_only=True)
+class MVCASensorDescription(SensorEntityDescription):
     """Describe an MVCA sensor."""
 
     key: str
-    name: str
-    icon: str
+    status_type: str
+    river: str
 
 
-SENSORS: Final = (
+SENSORS: Final[tuple[MVCASensorDescription, ...]] = (
     MVCASensorDescription(
         key=f"{TYPE_FLOOD}_{RIVER_MISSISSIPPI}",
         name="Mississippi River Flood Status",
         icon="mdi:home-flood",
+        status_type=TYPE_FLOOD,
+        river=RIVER_MISSISSIPPI,
     ),
     MVCASensorDescription(
         key=f"{TYPE_FLOOD}_{RIVER_CARP}",
         name="Carp River Flood Status",
         icon="mdi:home-flood",
+        status_type=TYPE_FLOOD,
+        river=RIVER_CARP,
     ),
     MVCASensorDescription(
         key=f"{TYPE_FLOOD}_{RIVER_LOWER_OTTAWA}",
         name="Lower Ottawa Flood Status",
         icon="mdi:home-flood",
+        status_type=TYPE_FLOOD,
+        river=RIVER_LOWER_OTTAWA,
     ),
     MVCASensorDescription(
         key=f"{TYPE_LOW_WATER}_{RIVER_MISSISSIPPI}",
         name="Mississippi River Low Water Status",
         icon="mdi:water-minus",
+        status_type=TYPE_LOW_WATER,
+        river=RIVER_MISSISSIPPI,
     ),
     MVCASensorDescription(
         key=f"{TYPE_LOW_WATER}_{RIVER_CARP}",
         name="Carp River Low Water Status",
         icon="mdi:water-minus",
+        status_type=TYPE_LOW_WATER,
+        river=RIVER_CARP,
     ),
     MVCASensorDescription(
         key=f"{TYPE_LOW_WATER}_{RIVER_LOWER_OTTAWA}",
         name="Lower Ottawa Low Water Status",
         icon="mdi:water-minus",
+        status_type=TYPE_LOW_WATER,
+        river=RIVER_LOWER_OTTAWA,
     ),
 )
 
@@ -73,9 +88,10 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up MVCA sensors."""
+    coordinator: MVCADataUpdateCoordinator = entry.runtime_data
 
     async_add_entities(
-        MVCASensor(entry.runtime_data, description)
+        MVCASensor(coordinator, description)
         for description in SENSORS
     )
 
@@ -95,16 +111,13 @@ class MVCASensor(
         description: MVCASensorDescription,
     ) -> None:
         """Initialize the sensor."""
-
-        super().__init__(coordinator)
+        super().__init__(coordinator, context=description.key)
 
         self.entity_description = description
-
         self._attr_name = description.name
         self._attr_icon = description.icon
-        self._attr_unique_id = (
-            f"mvca_{description.key}"
-        )
+        self._attr_unique_id = f"mvca_{description.key}"
+
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, "mvca")},
             name="MVCA Flood & Low Water",
@@ -115,15 +128,12 @@ class MVCASensor(
     @property
     def native_value(self) -> str | None:
         """Return the current status."""
+        if self.coordinator.data is None:
+            return None
 
-        return self.coordinator.data.get(
-            self.entity_description.key
-        )
+        return self.coordinator.data.get(self.entity_description.key)
 
     @property
     def extra_state_attributes(self) -> dict[str, str]:
         """Return additional attributes."""
-
-        return {
-            "source": DASHBOARD_URL,
-        }
+        return {"source": DASHBOARD_URL}
