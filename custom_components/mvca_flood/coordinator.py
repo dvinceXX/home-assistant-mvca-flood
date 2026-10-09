@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 from datetime import timedelta
+import logging
 import re
-from typing import Any
 
-from bs4 import BeautifulSoup
 from aiohttp import ClientError, ClientTimeout
+from bs4 import BeautifulSoup
 
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import (
@@ -19,12 +20,25 @@ from homeassistant.helpers.update_coordinator import (
 from .const import (
     DASHBOARD_URL,
     DEFAULT_SCAN_INTERVAL,
+    FLOOD_STATUSES,
+    LOW_WATER_STATUSES,
     RIVER_CARP,
     RIVER_LOWER_OTTAWA,
     RIVER_MISSISSIPPI,
     TYPE_FLOOD,
     TYPE_LOW_WATER,
 )
+
+_LOGGER = logging.getLogger(__name__)
+
+RIVERS = (
+    (RIVER_MISSISSIPPI, "Mississippi River"),
+    (RIVER_CARP, "Carp River"),
+    (RIVER_LOWER_OTTAWA, "Lower Ottawa"),
+)
+
+# Compatibility alias used by the integration and sensor platform.
+MVCAConfigEntry = ConfigEntry
 
 
 class MVCADataUpdateCoordinator(DataUpdateCoordinator[dict[str, str]]):
@@ -36,11 +50,19 @@ class MVCADataUpdateCoordinator(DataUpdateCoordinator[dict[str, str]]):
         scan_interval: int = DEFAULT_SCAN_INTERVAL,
     ) -> None:
         """Initialize the coordinator."""
+        if not isinstance(scan_interval, int) or isinstance(
+            scan_interval, bool
+        ):
+            raise ValueError("scan_interval must be an integer")
+
+        if not 5 <= scan_interval <= 1440:
+            raise ValueError("scan_interval must be between 5 and 1440")
+
         self.hass = hass
 
         super().__init__(
             hass,
-            logger=__import__("logging").getLogger(__name__),
+            logger=_LOGGER,
             name="MVCA Flood & Low Water",
             update_interval=timedelta(minutes=scan_interval),
         )
@@ -62,48 +84,46 @@ class MVCADataUpdateCoordinator(DataUpdateCoordinator[dict[str, str]]):
 
         except (ClientError, TimeoutError) as err:
             raise UpdateFailed(
-                f"Unable to retrieve MVCA data: {err}"
+                f"Unable to retrieve MVCA dashboard: {err}"
             ) from err
 
         try:
-            return self._parse_dashboard(html)
-        except (ValueError, AttributeError) as err:
+            data = self._parse_dashboard(html)
+        except (ValueError, AttributeError, TypeError) as err:
             raise UpdateFailed(
-                f"Unable to parse MVCA data: {err}"
+                f"Unable to parse MVCA dashboard: {err}"
             ) from err
+
+        _LOGGER.debug("Successfully updated MVCA status data")
+        return data
 
     @classmethod
     def _parse_dashboard(cls, html: str) -> dict[str, str]:
-        """Parse MVCA dashboard HTML."""
+        """Parse the six statuses from the MVCA dashboard."""
+        if not html or not html.strip():
+            raise ValueError("The MVCA dashboard response was empty")
+
         soup = BeautifulSoup(html, "html.parser")
 
         flood_section = cls._find_status_section(
-            soup,
-            "Flood Status",
+            soup, "Flood Status"
         )
-
         low_water_section = cls._find_status_section(
-            soup,
-            "Low Water Status",
+            soup, "Low Water Status"
         )
 
         data: dict[str, str] = {}
 
-        rivers = (
-            (RIVER_MISSISSIPPI, "Mississippi River"),
-            (RIVER_CARP, "Carp River"),
-            (RIVER_LOWER_OTTAWA, "Lower Ottawa"),
-        )
-
-        for river, display_name in rivers:
-            data[f"{TYPE_FLOOD}_{river}"] = cls._extract_status(
+        for river_key, display_name in RIVERS:
+            data[f"{TYPE_FLOOD}_{river_key}"] = cls._extract_status(
                 flood_section,
                 display_name,
+                FLOOD_STATUSES,
             )
-
-            data[f"{TYPE_LOW_WATER}_{river}"] = cls._extract_status(
+            data[f"{TYPE_LOW_WATER}_{river_key}"] = cls._extract_status(
                 low_water_section,
                 display_name,
+                LOW_WATER_STATUSES,
             )
 
         return data
@@ -113,99 +133,78 @@ class MVCADataUpdateCoordinator(DataUpdateCoordinator[dict[str, str]]):
         cls,
         soup: BeautifulSoup,
         heading_text: str,
-    ) -> Any:
-        """Find the DOM section containing a status heading."""
+    ):
+        """Find the smallest ancestor containing a heading and all rivers."""
         heading = soup.find(
             lambda tag: (
-                tag.name in {"h2", "h3", "h4"}
-                and cls._normalise(tag.get_text(" ", strip=True)).lower()
-                == heading_text.lower()
+                tag.name in {"h1", "h2", "h3", "h4", "h5", "h6"}
+                and cls._normalise(tag.get_text(" ", strip=True)).casefold()
+                == heading_text.casefold()
             )
         )
 
         if heading is None:
             raise ValueError(
-                f"Could not find '{heading_text}' section"
+                f"Could not find the '{heading_text}' heading"
             )
 
-        # Start with the heading's parent and walk upward until the
-        # container contains all three river names.
         container = heading.parent
 
         while container is not None:
             text = cls._normalise(
                 container.get_text(" ", strip=True)
             )
-
-            if (
-                "Mississippi River" in text
-                and "Carp River" in text
-                and "Lower Ottawa" in text
-            ):
+            if all(name in text for _, name in RIVERS):
                 return container
 
             container = container.parent
 
         raise ValueError(
-            f"Could not find data for '{heading_text}'"
+            f"Could not find all river data under '{heading_text}'"
         )
 
     @classmethod
     def _extract_status(
         cls,
-        section: Any,
+        section,
         river: str,
+        valid_statuses: tuple[str, ...],
     ) -> str:
-        """Extract the status associated with a river."""
-        valid_statuses = (
-            "Normal",
-            "Watershed Conditions Statement - Water Safety",
-            "Watershed Conditions Statement - Flood Outlook",
-            "Flood Watch",
-            "Flood Warning",
-        )
-
-        # Find the text node containing the river name.
+        """Extract a known status associated with a river."""
         river_element = section.find(
             string=lambda value: (
-                value is not None and river in value
+                value is not None
+                and river.casefold() in cls._normalise(value).casefold()
             )
         )
 
         if river_element is None:
             raise ValueError(
-                f"Could not find '{river}' in MVCA section"
+                f"Could not find '{river}' in the status section"
             )
 
-        # The status should be located in the same small DOM
-        # container as the river name. Avoid parsing the entire
-        # page or section, which can accidentally consume MVCA's
-        # navigation menu.
+        # Search nearby elements first, avoiding unrelated page content.
         element = river_element.parent
 
         for _ in range(5):
             if element is None:
                 break
 
-            text = cls._normalise(
-                element.get_text(" ", strip=True)
-            )
+            text = cls._normalise(element.get_text(" ", strip=True))
 
-            # Prefer the longest statuses first so that
-            # "Water Safety" / "Flood Outlook" are not accidentally
-            # matched incorrectly.
             for status in sorted(
                 valid_statuses,
                 key=len,
                 reverse=True,
             ):
-                if status in text:
+                if status.casefold() in text.casefold():
                     return status
 
             element = element.parent
 
         raise ValueError(
-            f"Could not find valid status for '{river}'"
+            f"Could not identify a known status for '{river}'. "
+            "The MVCA page may have changed or published a new status."
         )
 
     @staticmethod
