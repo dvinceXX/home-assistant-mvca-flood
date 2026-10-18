@@ -2,14 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Final
 
-from homeassistant.components.sensor import (
-    SensorEntity,
-    SensorEntityDescription,
-)
-from homeassistant.const import EntityCategory
+from homeassistant.components.sensor import SensorEntity, SensorEntityDescription
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -27,6 +23,22 @@ from .const import (
 from .coordinator import MVCAConfigEntry, MVCADataUpdateCoordinator
 
 
+# These are ordinal severity values for automations, not official MVCA codes.
+FLOOD_STATUS_VALUES: Final[dict[str, int]] = {
+    "Normal": 0,
+    "Watershed Conditions Statement - Water Safety": 1,
+    "Watershed Conditions Statement - Flood Outlook": 2,
+    "Flood Watch": 3,
+    "Flood Warning": 4,
+}
+LOW_WATER_STATUS_VALUES: Final[dict[str, int]] = {
+    "Normal": 0,
+    "Level I": 1,
+    "Level II": 2,
+    "Level III": 3,
+}
+
+
 @dataclass(frozen=True, kw_only=True)
 class MVCASensorDescription(SensorEntityDescription):
     """Describe an MVCA sensor."""
@@ -34,9 +46,10 @@ class MVCASensorDescription(SensorEntityDescription):
     key: str
     status_type: str
     river: str
+    is_numeric: bool = False
 
 
-SENSORS: Final[tuple[MVCASensorDescription, ...]] = (
+TEXT_SENSORS: Final[tuple[MVCASensorDescription, ...]] = (
     MVCASensorDescription(
         key=f"{TYPE_FLOOD}_{RIVER_MISSISSIPPI}",
         name="Mississippi River Flood Status",
@@ -79,6 +92,22 @@ SENSORS: Final[tuple[MVCASensorDescription, ...]] = (
         status_type=TYPE_LOW_WATER,
         river=RIVER_LOWER_OTTAWA,
     ),
+)
+
+NUMERIC_SENSORS: Final[tuple[MVCASensorDescription, ...]] = tuple(
+    replace(
+        description,
+        key=f"{description.key}_numeric",
+        name=f"{description.name} Numeric",
+        icon="mdi:numeric",
+        is_numeric=True,
+    )
+    for description in TEXT_SENSORS
+)
+
+SENSORS: Final[tuple[MVCASensorDescription, ...]] = (
+    *TEXT_SENSORS,
+    *NUMERIC_SENSORS,
 )
 
 
@@ -125,12 +154,31 @@ class MVCASensor(
         )
 
     @property
-    def native_value(self) -> str | None:
-        """Return the current status."""
+    def native_value(self) -> str | int | None:
+        """Return the text status or its numeric severity value."""
         if self.coordinator.data is None:
             return None
 
-        return self.coordinator.data.get(self.entity_description.key)
+        status = self.coordinator.data.get(self.entity_description.key)
+        if status is None:
+            # Numeric sensor keys have a _numeric suffix; use the original
+            # text status key to look up the corresponding status.
+            if self.entity_description.is_numeric:
+                status_key = self.entity_description.key.removesuffix("_numeric")
+                status = self.coordinator.data.get(status_key)
+            if status is None:
+                return None
+
+        if not self.entity_description.is_numeric:
+            return status
+
+        mapping = (
+            FLOOD_STATUS_VALUES
+            if self.entity_description.status_type == TYPE_FLOOD
+            else LOW_WATER_STATUS_VALUES
+        )
+        # Do not turn unrecognized statuses into a misleading numeric zero.
+        return mapping.get(status)
 
     @property
     def extra_state_attributes(self) -> dict[str, str]:
