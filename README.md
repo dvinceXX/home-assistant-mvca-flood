@@ -8,7 +8,7 @@ It polls the [MVCA water management dashboard](https://mvc.on.ca/engineering/wat
 - Carp River
 - Lower Ottawa
 
-Each river has a **flood status** sensor and a **low water status** sensor.
+Each river has a **flood status** sensor and a **low water status** sensor, plus numeric equivalents for automations.
 
 ## Installation
 
@@ -37,6 +37,8 @@ Only one instance of this integration is supported.
 
 All sensors are attached to a single device: **MVCA Flood & Low Water**.
 
+For each river, the integration provides a text status sensor and a corresponding numeric sensor.
+
 | Sensor | Description |
 | --- | --- |
 | Mississippi River Flood Status | Flood messaging for the Mississippi River |
@@ -45,8 +47,30 @@ All sensors are attached to a single device: **MVCA Flood & Low Water**.
 | Mississippi River Low Water Status | Low-water messaging for the Mississippi River |
 | Carp River Low Water Status | Low-water messaging for the Carp River |
 | Lower Ottawa Low Water Status | Low-water messaging for the Lower Ottawa |
+| Each status sensor with `Numeric` suffix | Numeric severity value for automations |
 
-Typical flood values include `Normal`, watershed condition statements, `Flood Watch`, and `Flood Warning`. Typical low-water values include `Normal`, `Level I`, `Level II`, and `Level III`. The integration stores the text published on the dashboard.
+### Numeric mappings
+
+Flood status numeric values:
+
+| Status | Value |
+| --- | ---: |
+| Normal | 0 |
+| Watershed Conditions Statement - Water Safety | 1 |
+| Watershed Conditions Statement - Flood Outlook | 2 |
+| Flood Watch | 3 |
+| Flood Warning | 4 |
+
+Low-water status numeric values:
+
+| Status | Value |
+| --- | ---: |
+| Normal | 0 |
+| Level I | 1 |
+| Level II | 2 |
+| Level III | 3 |
+
+These are ordinal severity values chosen for Home Assistant automations; they are **not official MVCA numeric codes**. A status that does not match a known mapping produces no numeric value rather than defaulting to zero. The original text sensors remain unchanged.
 
 Each sensor includes a `source` attribute pointing at the MVCA dashboard.
 
